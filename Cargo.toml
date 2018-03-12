@@ -1,0 +1,9 @@
+[package]
+name = "reaktor-mapper"
+version = "0.1.0"
+authors = ["Ian Pickering <ipickering2@gmail.com>"]
+
+[dependencies]
+nom="3"
+byteorder="1"
+clap="2"

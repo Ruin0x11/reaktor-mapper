@@ -3,6 +3,7 @@ extern crate clap;
 #[macro_use]
 extern crate nom;
 extern crate byteorder;
+extern crate rand;
 
 use clap::{App, Arg};
 
@@ -14,6 +15,9 @@ fn app<'a, 'b>() -> App<'a, 'b> {
         .about("Quickly generates Reaktor sample maps.")
         .arg(Arg::with_name("version").short("V").long("version").help(
             "Prints version info",
+        ))
+        .arg(Arg::with_name("shuffle").short("s").long("shuffle").help(
+            "Shuffle and pick samples",
         ))
         .arg(Arg::with_name("root").index(1))
         .arg(Arg::with_name("name").index(2))
@@ -38,6 +42,7 @@ fn main() {
     };
 
     let name = matches.value_of("name").unwrap_or("output.map");
+    let shuffle = matches.is_present("shuffle");
 
-    writer::map_folder(root, name);
+    writer::map_folder(root, name, shuffle);
 }

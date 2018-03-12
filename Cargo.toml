@@ -7,3 +7,4 @@ authors = ["Ian Pickering <ipickering2@gmail.com>"]
 nom="3"
 byteorder="1"
 clap="2"
+rand="0.4"

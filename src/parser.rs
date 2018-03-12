@@ -6,6 +6,7 @@ use std::io;
 use std::fs;
 use std::path::PathBuf;
 use std::result;
+use rand::{self, Rng};
 
 const MAPFILE_HEADER: &'static str = "NIMapFile";
 
@@ -22,7 +23,7 @@ pub struct MapFile {
 }
 
 impl MapFile {
-    pub fn new(path: &PathBuf) -> Self {
+    pub fn new(path: &PathBuf, shuffle: bool) -> Self {
         let entries = fs::read_dir(path).unwrap();
         let mut paths = Vec::new();
 
@@ -32,8 +33,15 @@ impl MapFile {
             }
         }
 
+        if shuffle {
+            rand::thread_rng().shuffle(&mut paths);
+        }
+
         let header = Header::new(paths.len() as u32);
-        let entries: Vec<Entry> = paths.into_iter().take(128).enumerate().map(|(i, path)| {
+        let mut chosen: Vec<PathBuf> = paths.into_iter().take(128).collect();
+        chosen.sort_by(|a, b| a.cmp(&b));
+
+        let entries: Vec<Entry> = chosen.into_iter().enumerate().map(|(i, path)| {
             Entry::new(path.to_str().unwrap(), i as u32, i as u32, 0, 127, i as u32)
         }).collect();
 
@@ -75,6 +83,15 @@ impl fmt::Display for MapFile {
     }
 }
 
+impl Serialize for MapFile {
+    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
+        self.header.write(wtr)?;
+        for e in self.entries.iter() {
+            e.write(wtr)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 pub struct Header {
@@ -100,6 +117,23 @@ impl Header {
             zero_2: 0x0,
             sample_count: count,
         }
+    }
+}
+
+impl Serialize for Header {
+    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
+        wtr.write_u32::<LittleEndian>(0)?;
+        wtr.write_u32::<LittleEndian>(self.version)?;
+        write!(wtr, "{}", MAPFILE_HEADER)?;
+        wtr.write_u32::<LittleEndian>(self.thing)?;
+        wtr.write(&[1]);
+        write!(wtr, "{}", "mapp")?;
+        wtr.write_u32::<LittleEndian>(self.zero_c)?;
+        wtr.write_u32::<LittleEndian>(self.one_1)?;
+        wtr.write_u32::<LittleEndian>(self.one_2)?;
+        wtr.write_u32::<LittleEndian>(self.zero_1)?;
+        wtr.write_u32::<LittleEndian>(self.zero_2)?;
+        wtr.write_u32::<LittleEndian>(self.sample_count)
     }
 }
 
@@ -133,7 +167,7 @@ pub struct Entry {
     one_1: u32,
     is_embedded: bool,
     crc: Option<String>,
-    path: String,
+    pub path: String,
     sample: Option<EmbeddedSample>,
     thing_a: u32,
     thing_b: u32,
@@ -185,6 +219,40 @@ impl fmt::Display for Entry {
     }
 }
 
+fn bool_to_u32(b: bool) -> u32 {
+    if b {
+        1
+    } else {
+        0
+    }
+}
+
+impl Serialize for Entry {
+    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
+        if self.is_embedded {
+            return Err(io::Error::new(io::ErrorKind::Other, "Embedded files are not supported."))
+        }
+        wtr.write_u32::<LittleEndian>(1)?;
+        wtr.write_u32::<LittleEndian>(bool_to_u32(self.is_embedded))?;
+        wtr.write_u32::<LittleEndian>(self.path.len() as u32)?;
+        write!(wtr, "{}", self.path)?;
+        wtr.write_u32::<LittleEndian>(0)?;
+        write!(wtr, "{}", "entr")?;
+        wtr.write_u32::<LittleEndian>(self.thing_a)?;
+        wtr.write_u32::<LittleEndian>(self.thing_b)?;
+        wtr.write_u32::<LittleEndian>(self.low)?;
+        wtr.write_u32::<LittleEndian>(self.high)?;
+        wtr.write_u32::<LittleEndian>(self.lvel)?;
+        wtr.write_u32::<LittleEndian>(self.hvel)?;
+        wtr.write_u32::<LittleEndian>(self.root)?;
+        let things: Vec<u32> = vec![0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x18F5AC];
+        for i in things.into_iter() {
+            wtr.write_u32::<LittleEndian>(i)?;
+        }
+        Ok(())
+    }
+}
+
 named!(parse_crc <&[u8], String>, do_parse!(
         thingf: le_u32 >>
         crcsiz: le_u32 >>
@@ -216,23 +284,6 @@ named!(parse_header <&[u8], Header>, do_parse!(
             sample_count: sample_count,
         })
 ));
-
-impl Serialize for Header {
-    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
-        wtr.write_u32::<LittleEndian>(0)?;
-        wtr.write_u32::<LittleEndian>(self.version)?;
-        write!(wtr, "{}", MAPFILE_HEADER)?;
-        wtr.write_u32::<LittleEndian>(self.thing)?;
-        wtr.write(&[1]);
-        write!(wtr, "{}", "mapp")?;
-        wtr.write_u32::<LittleEndian>(self.zero_c)?;
-        wtr.write_u32::<LittleEndian>(self.one_1)?;
-        wtr.write_u32::<LittleEndian>(self.one_2)?;
-        wtr.write_u32::<LittleEndian>(self.zero_1)?;
-        wtr.write_u32::<LittleEndian>(self.zero_2)?;
-        wtr.write_u32::<LittleEndian>(self.sample_count)
-    }
-}
 
 fn parse_embedded_sample(i: &[u8], size: u32) -> IResult<&[u8], EmbeddedSample> {
     do_parse!(i,
@@ -294,40 +345,6 @@ named!(parse_entry <&[u8], Entry>, do_parse!(
         })
 ));
 
-fn bool_to_u32(b: bool) -> u32 {
-    if b {
-        1
-    } else {
-        0
-    }
-}
-
-impl Serialize for Entry {
-    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
-        if self.is_embedded {
-            return Err(io::Error::new(io::ErrorKind::Other, "Embedded files are not supported."))
-        }
-        wtr.write_u32::<LittleEndian>(1)?;
-        wtr.write_u32::<LittleEndian>(bool_to_u32(self.is_embedded))?;
-        wtr.write_u32::<LittleEndian>(self.path.len() as u32)?;
-        write!(wtr, "{}", self.path)?;
-        wtr.write_u32::<LittleEndian>(0)?;
-        write!(wtr, "{}", "entr")?;
-        wtr.write_u32::<LittleEndian>(self.thing_a)?;
-        wtr.write_u32::<LittleEndian>(self.thing_b)?;
-        wtr.write_u32::<LittleEndian>(self.low)?;
-        wtr.write_u32::<LittleEndian>(self.high)?;
-        wtr.write_u32::<LittleEndian>(self.lvel)?;
-        wtr.write_u32::<LittleEndian>(self.hvel)?;
-        wtr.write_u32::<LittleEndian>(self.root)?;
-        let things: Vec<u32> = vec![0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x18F5AC];
-        for i in things.into_iter() {
-            wtr.write_u32::<LittleEndian>(i)?;
-        }
-        Ok(())
-    }
-}
-
 named!(parse_map_file <&[u8], MapFile>, do_parse!(
     header: parse_header >>
         entries: count!(parse_entry, header.sample_count as usize) >>
@@ -336,16 +353,6 @@ named!(parse_map_file <&[u8], MapFile>, do_parse!(
             entries: entries,
         })
 ));
-
-impl Serialize for MapFile {
-    fn write<W: Write>(&self, wtr: &mut W) -> Result<(), io::Error> {
-        self.header.write(wtr)?;
-        for e in self.entries.iter() {
-            e.write(wtr)?;
-        }
-        Ok(())
-    }
-}
 
 pub fn go(byt: &[u8]) {
     match parse_map_file(byt) {
